@@ -1,0 +1,168 @@
+---
+title: "Final Analysis: COVID-19 in Mexico"
+author: "Matt Querdasi and Sophie Cohen"
+date: "March 22, 2021"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE)
+```
+
+## About the Data
+The data set contains a sample of individuals hospitalized in Mexico with a suspected severe case of COVID. We will determine what factors relate to time until release from hospital. Below we examine the variables to see which contribute to a patient’s release from the hospital. We chose these variables because some are known covid risk factors, while others that were included in the dataset just seemed interesting to analyze (such as nationality).
+
+```{r}
+covid<-read.csv("https://raw.githubusercontent.com/nazzstat/SurvivalData/master/Covid_Mexico.csv")
+
+library(survival)
+library(survminer)
+
+# converting dates
+covid$FECHA_INGRESO <- as.Date(covid$FECHA_INGRESO)
+covid$FECHA_SINTOMAS <- as.Date(covid$FECHA_SINTOMAS)
+
+# General survival curve 
+surv.covid_general <- survfit(Surv(Time, Released2)~1, data=covid)
+ggsurvplot(surv.covid_general)
+```
+
+We can see from our general surivival curve that as time goes on, survival probability decreases. In this case, the event variable is being released from the hospital and deemed to be in recovery. There is a median survival of roughly 47 days.
+
+
+## Sex
+```{r}
+sex.surv <- survfit(Surv(Time, Released2) ~ SEXO, data = covid)
+ggsurvplot(sex.surv, conf.int = FALSE)
+survdiff(Surv(Time, Released2) ~ SEXO, data = covid, rho = 0)
+coxph(Surv(Time, Released2) ~ SEXO, data = covid)
+```
+
+Males have higher survival probability than females. This means that men stay in the hospital longer than women do. In other words, women are released and deemed in recovery sooner than men. There is a significant difference in the survival curves between the two sexes (X2(1) = 513, p-value < 0.001). We can see from the coxph model that there is a significant difference in hazards for sex (z = 22.65, p-value < 0.001). Females have a hazard of being released from the hospital that is 1.15 times higher than that of males.
+
+## Age
+```{r}
+# Age of patient
+# Make age groups
+covid$age_group[covid$EDAD < 30 ] <- "less_than_30"
+covid$age_group[covid$EDAD >= 30 ] <- "30_to_50"
+covid$age_group[covid$EDAD > 50 ] <- "greater_than_50"
+
+# assess number of patients in each age group
+summary(covid$EDAD)
+summary(factor(covid$age_group))
+
+surv.patient_age <- survfit(Surv(Time, Released2)~factor(age_group), data=covid)
+ggsurvplot(surv.patient_age, conf.int = FALSE)
+
+# Estimated median survival time in days by age for when someone was admitted into hospital
+covid$admission_date_stage[covid$FECHA_INGRESO < as.Date("2020-04-01") ] <- "stage1"
+covid$admission_date_stage[covid$FECHA_INGRESO >= as.Date("2020-04-01") ] <- "stage2"
+covid$admission_date_stage[covid$FECHA_INGRESO >= as.Date("2020-06-01") ] <- "stage3"
+
+survdiff(Surv(Time, Released2) ~ age_group, data = covid, rho = 0)
+```
+
+Those who are younger than 30 have the highest survival probability. This means that they spend the most time in the hospital. Those who are older than 50 have the lowest survival probability, which means that they are released the soonest. There is a significant difference in the survival curves between the three age groups (X2(2) = 10202, p-value < 0.001).
+
+
+## Date of Admission
+```{r}
+# split date of admission into stages
+covid$admission_date_stage[covid$FECHA_INGRESO < as.Date("2020-04-01") ] <- "stage1"
+covid$admission_date_stage[covid$FECHA_INGRESO >= as.Date("2020-04-01") ] <- "stage2"
+covid$admission_date_stage[covid$FECHA_INGRESO >= as.Date("2020-06-01") ] <- "stage3"
+
+# assess number of cases in each stage
+summary(factor(covid$admission_date_stage))
+
+# Survival curve for when a patient was admitted
+surv.date <- survfit(Surv(Time, Released2)~factor(admission_date_stage), data=covid)
+ggsurvplot(surv.date)
+surv.date
+
+survdiff(Surv(Time, Released2) ~ admission_date_stage, data = covid, rho = 0)
+
+mod1<-survreg(Surv(Time, Released2)~as.factor(admission_date_stage)+EDAD, data=covid, dist="exponential")
+summary(mod1)
+
+library(ggplot2)
+newdata <- expand.grid(admission_date_stage=c("stage1","stage2","stage3"), EDAD=seq(0,100,.1))
+plotdata <- cbind(newdata, median=(predict(mod1,newdata=newdata,type="response"))*(-log(0.5)))
+
+ggplot(data=plotdata)+
+  geom_line(aes(x=EDAD, y=median, color=as.factor(admission_date_stage)), size=2)+
+  scale_color_manual("admission_date_stage", values=c("blue","magenta", "red"))+
+  ylab("Estimated Median Survival Time (in days)")+
+  xlab("Age")
+```
+
+People who were admitted before April 1st, 2020 have the highest survival probability. This means that these people spend the longest amount of time in the hospital. People who were admitted after June 1st, 2020 have the lowest survival probability. This could potentially be a result of hospitals being more prepared to handle covid cases and help patients recover quicker, or that hospitals are more strained with patient numbers and have to release patients sooner to make room for others. There is a significant difference in the survival curves between the three admission stages (X2(2) = 43650, p-value < 0.001). After creating an estimated survival curve and analyzing the distribution of the admission_group_stage variable, we saw that there were not enough clear events in the stage1 group to calculate a median value. Therefore, in our estimated median survival curve we see that stage1 has an extreme curve, with very high values. We can, however, interpret stage2 and stage3. Both of these stages as you get older, the estimated median survival time decreases. 
+
+
+## Nationality
+```{r}
+surv.nationality<- survfit(Surv(Time, Released2)~factor(NACIONALIDAD), data=covid)
+ggsurvplot(surv.nationality, conf.int = FALSE)
+survdiff(Surv(Time, Released2) ~ factor(NACIONALIDAD), data = covid, rho = 0)
+
+
+coxph.nationality <- coxph(Surv(Time, Released2)~factor(NACIONALIDAD), data=covid)
+coxph.nationality
+
+# analyzing if nationality controlled for age is significant
+survreg(Surv(Time, Released2)~as.factor(NACIONALIDAD)+EDAD, data=covid, dist="weibull")
+
+summary(factor(covid$NACIONALIDAD))
+```
+
+Foreigner patients have a hazard of being released from the hospital that is 0.388 times that of Mexican patients. That is foreigners on average have a hazards that is roughly 61% less than the hazards of Mexicans. This relationship is significant as we have a z = -13.83 and a p-value < 0.05.
+There is a significant difference in the survival curves between the two nationalities (X2(1) = 207, p-value < 0.001).
+We see from our analysis we get t^ = exp(5.077 + 0.911NACI2 - 0.0175) x (-ln(S(t)))^(1/1.0599). From this equation we see that while controlling for age, foreigners spending roughly exp(0.911) or 2.49 times as long in the hospital than mexicans. We see that this relationship is significant, as we get a chisq = 111085.88 and a p-value < 0.05. This is interesting, as it goes against our hypothesis that the reason foreigners spend longer in the hospital, is because they tend to be older
+
+
+## Asthma
+```{r}
+asthma.surv <- survfit(Surv(Time, Released2) ~ ASMA, data = covid)
+ggsurvplot(asthma.surv, conf.int = FALSE)
+survdiff(Surv(Time, Released2) ~ ASMA, data = covid, rho = 0)
+
+# Estimated median survival time in days by age for someone with and without asthma
+covid$ASMA[covid$ASMA==1]<-"Asthma"
+covid$ASMA[covid$ASMA==2]<-"No asthma"
+
+mod1<-survreg(Surv(Time, Released2)~as.factor(ASMA)+EDAD, data=covid, dist="exponential")
+summary(mod1)
+
+library(ggplot2)
+newdata <- expand.grid(ASMA=c("Asthma","No asthma"), EDAD=seq(0,100,.1))
+plotdata <- cbind(newdata, median=(predict(mod1,newdata=newdata,type="response"))*(-log(0.5)))
+
+ggplot(data=plotdata)+
+  geom_line(aes(x=EDAD, y=median, color=as.factor(ASMA)), size=2)+
+  scale_color_manual("ASMA", values=c("blue","magenta"))+
+  ylab("Estimated Median Survival Time (in days)")+
+  xlab("Age")
+```
+
+Those who have asthma have a higher surival probability than those who don't. This means that people who have asthma stay in the hospital longer than those who do not have asthma. In other words, people who don't have asthma are released and deemed in recovery sooner than those who have asthma. There is a significant difference in the survival curves between the two groups (having diabetes or not) (X2(1) = 170, p-value < 0.001). The estimated median surival curve shows that as age increases, the estimated median survival times for thoes with and without asthma decreases. We can see, however, that those with asthma at any age have a higher estimated median survival time than those without asthma, which means that they stay in the hospital longer.
+
+
+## Cardiovascular Disease
+```{r}
+cardio.surv <- survfit(Surv(Time, Released2) ~ CARDIOVASCULAR, data = covid)
+ggsurvplot(cardio.surv, conf.int = FALSE)
+survdiff(Surv(Time, Released2) ~ CARDIOVASCULAR, data = covid, rho = 0)
+
+coxph.cardio <- coxph(Surv(Time, Released2)~factor(CARDIOVASCULAR), data=covid)
+coxph.cardio
+```
+
+Those who have cardiovascular disease have a higher survival probability than those who do not This means that people with cardiovascular disease stay in the hospital longer than those who don't have cardiovascular disease. There is a significant difference in the survival curves between the two groups (having diabetes or not) (X2(1) = 164, p-value < 0.001). We can see from the coxph model that there is a significant difference in hazards for sex (z = 12.76, p-value < 0.001). Those without cardiovascular disease have a hazard of being released from the hospital that is 1.21 times higher than that of those with cardiovascular disease. This makes sense because studies have shown that covid affects peoples' hearts.
+
+## References
+https://raw.githubusercontent.com/nazzstat/SurvivalData/master/Covid_Mexico.csv
